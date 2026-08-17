@@ -1,0 +1,21 @@
+:root {
+  --adriatic: #1B3A52;
+  --limestone: #F0EBE1;
+  --albanian-red: #E8102A;
+  --parchment: #C9B99A;
+  --offwhite: #FAFAF7;
+}
+
+body {
+  margin: 0;
+  background: var(--limestone);
+  font-family: Inter, sans-serif;
+}
+
+.persona-title {
+  font-family: "Playfair Display", serif;
+}
+
+.place-chip {
+  font-family: "Courier Prime", monospace;
+}
