@@ -8,11 +8,10 @@ services:
         as: 8000
         to:
           - global: true
-    env:
-      - GROQ_API_KEY=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
-      - GOOGLE_PLACES_API_KEY=AIzaSyAezZ520c39xtnHgo43xmMV6z9eY8R6npg
-
-  frontend:
+env:
+      - GROQ_API_KEY=your_groq_api_key_here
+      - GOOGLE_PLACES_API_KEY=your_google_places_api_key_here
+frontend:
     image: eb1609/albania-frontend:latest
     expose:
       - port: 80
