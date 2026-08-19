@@ -19,20 +19,21 @@ print(f"🔑 GOOGLE_PLACES_API_KEY Loaded: {'YES' if GOOGLE_PLACES_API_KEY else 
 
 app = FastAPI(title="Albania AI Local Guide Backend")
 
-# 2. Allow ALL Origins so Vercel + Local testing work seamlessly
+# 2. CORS Middleware configured for cross-origin EventSource (Safari/Chrome fix)
+# NOTE: When allow_origins is ["*"], allow_credentials MUST be False for browser SSE compliance
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from Vercel, localhost, or custom domains
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Type", "Cache-Control"],
 )
 
 # Initialize Groq Client
 client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def fetch_real_places(query: str) -> str:
-    # Re-check key in case environment reloaded
     api_key = os.environ.get("GOOGLE_PLACES_API_KEY", GOOGLE_PLACES_API_KEY)
     print(f"🔍 DEBUG: Searching Google Places for query: '{query}'")
     
@@ -81,11 +82,19 @@ async def root():
 
 @app.get("/api/stream")
 async def stream(msg: str, request: Request):
+    print(f"🚀 Incoming stream request for message: '{msg}'")
+
     if not client:
         err_payload = json.dumps({"token": "[Error: GROQ_API_KEY is not configured on backend server]"})
         return StreamingResponse(
             iter([f"data: {err_payload}\n\n", "data: [DONE]\n\n"]),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
         )
 
     real_data = fetch_real_places(msg)
@@ -116,6 +125,7 @@ async def stream(msg: str, request: Request):
 
             async for chunk in response:
                 if await request.is_disconnected():
+                    print("⚠️ Client disconnected early")
                     break
                 content = chunk.choices[0].delta.content or ""
                 if content:
@@ -123,9 +133,19 @@ async def stream(msg: str, request: Request):
                     yield f"data: {payload}\n\n"
 
         except Exception as e:
+            print(f"❌ Exception during streaming: {e}")
             err_payload = json.dumps({"token": f"\n[Error: {str(e)}]"})
             yield f"data: {err_payload}\n\n"
 
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
