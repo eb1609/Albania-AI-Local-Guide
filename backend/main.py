@@ -113,7 +113,7 @@ async def stream(msg: str, request: Request):
     async def event_generator():
         try:
             response = await client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": context_prompt},
                     {"role": "user", "content": msg}
