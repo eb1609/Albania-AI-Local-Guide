@@ -35,33 +35,45 @@ client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def fetch_real_places(query: str) -> str:
     api_key = os.environ.get("GOOGLE_PLACES_API_KEY", GOOGLE_PLACES_API_KEY)
-    print(f"🔍 DEBUG: Searching Google Places for query: '{query}'")
+    print(f"🔍 DEBUG: Searching Google Places (New) for query: '{query}'")
     
     if not api_key:
         print("❌ DEBUG: GOOGLE_PLACES_API_KEY is missing!")
         return ""
     
-    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {
-        "query": f"top restaurants in {query}" if "restaurant" not in query else query,
-        "key": api_key
+    url = "https://places.googleapis.com/v1/places:searchText"
+    
+    text_query = f"top restaurants in {query}" if "restaurant" not in query else query
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating"
+    }
+    
+    payload = {
+        "textQuery": text_query,
+        "pageSize": 5
     }
     
     try:
-        response = requests.get(url, params=params, timeout=4)
-        data = response.json()
+        response = requests.post(url, headers=headers, json=payload, timeout=4)
         
-        status = data.get("status")
-        print(f"🔍 DEBUG: Google Places API Status: {status}")
-        
-        if status != "OK":
-            print(f"❌ DEBUG: Google API Error Details: {data.get('error_message')}")
+        if response.status_code != 200:
+            print(f"❌ DEBUG: Google API Error Details ({response.status_code}): {response.text}")
             return ""
 
-        results = data.get("results", [])[:5]
+        data = response.json()
+        places = data.get("places", [])
+        
+        if not places:
+            print("⚠️ DEBUG: No places found for query.")
+            return ""
+
         formatted_places = [
-            f"- {p.get('name')} (Rating: {p.get('rating', 'N/A')}/5, Address: {p.get('formatted_address')})"
-            for p in results
+            f"- {p.get('displayName', {}).get('text', 'N/A')} "
+            f"(Rating: {p.get('rating', 'N/A')}/5, Address: {p.get('formattedAddress', 'N/A')})"
+            for p in places
         ]
         
         output = "\n".join(formatted_places)
@@ -71,7 +83,6 @@ def fetch_real_places(query: str) -> str:
     except Exception as e:
         print("❌ DEBUG: Exception in fetch_real_places:", e)
         return ""
-
 @app.get("/")
 async def root():
     return {
