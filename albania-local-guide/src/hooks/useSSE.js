@@ -1,13 +1,19 @@
 export default function startSSE(message, onChunk, onError, onComplete) {
   if (!message) return () => {};
 
-  const url = `/api/stream?msg=${encodeURIComponent(message)}`;
+  // Read backend URL from environment, defaulting directly to your Render live backend
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "https://albania-ai-local-guide.onrender.com";
+  
+  // Ensure no trailing slash on baseUrl
+  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
+  const url = `${cleanBaseUrl}/api/stream?msg=${encodeURIComponent(message)}`;
+
   const es = new EventSource(url);
 
   es.onmessage = (event) => {
     if (event.data === "[DONE]") {
       es.close();
-      if (onComplete) onComplete(); // <--- Notify Chat that streaming completed!
+      if (onComplete) onComplete();
       return;
     }
 
@@ -23,7 +29,7 @@ export default function startSSE(message, onChunk, onError, onComplete) {
     console.error("SSE error:", err);
     es.close();
     if (onError) onError(err);
-    if (onComplete) onComplete(); // <--- Clean up state even on error!
+    if (onComplete) onComplete();
   };
 
   return () => es.close();
