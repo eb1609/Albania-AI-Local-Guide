@@ -7,27 +7,49 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from groq import AsyncGroq
 from dotenv import load_dotenv, find_dotenv
+
+# 1. ALWAYS load environment variables FIRST
+load_dotenv(find_dotenv(), override=True)
+
 GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+print(f"🔑 GROQ_API_KEY Loaded: {'YES' if GROQ_API_KEY else 'NO'}")
+print(f"🔑 GOOGLE_PLACES_API_KEY Loaded: {'YES' if GOOGLE_PLACES_API_KEY else 'NO'}")
+
+app = FastAPI(title="Albania AI Local Guide Backend")
+
+# 2. Allow ALL Origins so Vercel + Local testing work seamlessly
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows requests from Vercel, localhost, or custom domains
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize Groq Client
+client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 def fetch_real_places(query: str) -> str:
+    # Re-check key in case environment reloaded
+    api_key = os.environ.get("GOOGLE_PLACES_API_KEY", GOOGLE_PLACES_API_KEY)
     print(f"🔍 DEBUG: Searching Google Places for query: '{query}'")
-    print(f"🔍 DEBUG: API Key present: {bool(GOOGLE_PLACES_API_KEY)}")
     
-    if not GOOGLE_PLACES_API_KEY:
+    if not api_key:
         print("❌ DEBUG: GOOGLE_PLACES_API_KEY is missing!")
         return ""
     
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {
         "query": f"top restaurants in {query}" if "restaurant" not in query else query,
-        "key": GOOGLE_PLACES_API_KEY
+        "key": api_key
     }
     
     try:
         response = requests.get(url, params=params, timeout=4)
         data = response.json()
         
-        # Check API status returned by Google
         status = data.get("status")
         print(f"🔍 DEBUG: Google Places API Status: {status}")
         
@@ -48,42 +70,6 @@ def fetch_real_places(query: str) -> str:
     except Exception as e:
         print("❌ DEBUG: Exception in fetch_real_places:", e)
         return ""
-# Force load .env from the current or parent directory
-load_dotenv(find_dotenv(), override=True)
-
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-
-# Print on startup so you can see if it loaded in terminal
-print(f"🔑 GROQ_API_KEY Loaded: {'YES' if GROQ_API_KEY else 'NO'}")
-app = FastAPI(title="Albania AI Local Guide Backend")
-
-# Allow CORS for local Vite dev server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize Groq Client
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
-# Unified Model Choice
-# CHANGE THIS IN main.py
-MODEL_NAME = "llama-3.3-70b-versatile"  # Replaces "llama-3.3-70b-versatile"
-
-# System Prompt combining Persona, Practical Knowledge, and Itinerary Planning
-UNIFIED_GUIDE_SYSTEM = (
-    "You are 'Shpresa', an expert Albanian AI Local Guide. Your goal is to help visitors "
-    "plan unforgettable trips across Albania. "
-    "Always maintain a warm, welcoming, and hospitable tone ('Përshëndetje!'). "
-    "Provide practical, insider travel advice, highlighting local culture, food, historic sites, "
-    "and natural scenery (like the Albanian Riviera, Gjirokastër, Berat, Tirana, and the Accursed Mountains). "
-    "When asked for recommendations or itineraries, structure your answer clearly using Markdown bold text "
-    "and clean bullet points. Keep your responses concise, engaging, and directly useful."
-)
 
 @app.get("/")
 async def root():
@@ -96,13 +82,14 @@ async def root():
 @app.get("/api/stream")
 async def stream(msg: str, request: Request):
     if not client:
-        # Error handling...
-        return
+        err_payload = json.dumps({"token": "[Error: GROQ_API_KEY is not configured on backend server]"})
+        return StreamingResponse(
+            iter([f"data: {err_payload}\n\n", "data: [DONE]\n\n"]),
+            media_type="text/event-stream"
+        )
 
-    # 1. Fetch real venue data dynamically based on user prompt
     real_data = fetch_real_places(msg)
     
-    # 2. Build dynamic system prompt grounded in real Google data
     context_prompt = (
         "You are 'Shpresa', an expert Albanian AI Local Guide. "
         "Keep your tone warm, welcoming, and concise. "
@@ -123,7 +110,7 @@ async def stream(msg: str, request: Request):
                     {"role": "user", "content": msg}
                 ],
                 stream=True,
-                temperature=0.2, # Keep low to stick to provided facts
+                temperature=0.2,
                 max_tokens=600
             )
 
