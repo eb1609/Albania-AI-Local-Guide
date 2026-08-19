@@ -113,7 +113,7 @@ async def stream(msg: str, request: Request):
     async def event_generator():
         try:
             response = await client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": context_prompt},
                     {"role": "user", "content": msg}
