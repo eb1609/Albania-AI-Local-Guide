@@ -42,13 +42,13 @@ def fetch_real_places(query: str) -> str:
         return ""
     
     url = "https://places.googleapis.com/v1/places:searchText"
-    
     text_query = f"top restaurants in {query}" if "restaurant" not in query else query
     
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating"
+        # FieldMask explicitly asks Google for location coordinates
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.location"
     }
     
     payload = {
@@ -70,14 +70,21 @@ def fetch_real_places(query: str) -> str:
             print("⚠️ DEBUG: No places found for query.")
             return ""
 
-        formatted_places = [
-            f"- {p.get('displayName', {}).get('text', 'N/A')} "
-            f"(Rating: {p.get('rating', 'N/A')}/5, Address: {p.get('formattedAddress', 'N/A')})"
-            for p in places
-        ]
+        formatted_places = []
+        for p in places:
+            name = p.get('displayName', {}).get('text', 'N/A')
+            rating = p.get('rating', 'N/A')
+            address = p.get('formattedAddress', 'N/A')
+            loc = p.get('location', {})
+            lat = loc.get('latitude', 0.0)
+            lng = loc.get('longitude', 0.0)
+            
+            formatted_places.append(
+                f"- Name: {name} | Rating: {rating}/5 | Address: {address} | Lat: {lat} | Lng: {lng}"
+            )
         
         output = "\n".join(formatted_places)
-        print(f"✅ DEBUG: Fetched Places:\n{output}")
+        print(f"✅ DEBUG: Fetched Places with Coordinates:\n{output}")
         return output
 
     except Exception as e:
