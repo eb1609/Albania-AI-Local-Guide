@@ -3,8 +3,13 @@ import hashlib
 import json
 import redis
 import numpy as np
-from openai import OpenAI
-
+import os
+from groq import Groq
+def get_groq_client():
+    key = os.getenv("GROQ_API_KEY")
+    if not key:
+        return None
+    return Groq(api_key=key)
 # Connect to Redis instance (local or hosted)
 redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=False)
 client = OpenAI()

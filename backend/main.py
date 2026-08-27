@@ -3,11 +3,12 @@ import json
 import sys
 import asyncio
 from typing import AsyncGenerator
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from fastapi import FastAPI, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv, find_dotenv
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 # Import underlying agents and services
 from agents.planner_agent import run_planner_pipeline
 from services.cache import get_exact_cache, set_exact_cache, get_semantic_cache, set_semantic_cache
