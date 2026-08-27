@@ -1,5 +1,9 @@
 fastapi
 uvicorn
-groq
-python-dotenv
 requests
+groq
+openai
+python-dotenv
+redis
+numpy
+langfuse
