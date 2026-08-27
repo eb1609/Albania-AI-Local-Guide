@@ -1,7 +1,7 @@
 # backend/services/tracer.py
 import os
 import time
-from typing import Callable, Any
+from typing import Callable
 from langfuse import Langfuse
 
 # Initialize Langfuse client safely
