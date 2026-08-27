@@ -1,8 +1,8 @@
 import os
 from contextlib import nullcontext
-from openai import OpenAI
+from groq import Groq  # Native Groq client
 
-# Safe Langfuse fallback: prevents crashes if langfuse is missing or unconfigured
+# Safe Langfuse fallback
 try:
     from langfuse.decorators import observe, langfuse_context  # type: ignore
 except (ImportError, ModuleNotFoundError):
@@ -19,7 +19,6 @@ except (ImportError, ModuleNotFoundError):
 
     langfuse_context = DummyLangfuseContext()
 
-# Absolute imports matching sys.path search path in backend/main.py
 from services.config import ALBANIA_COORDS
 from services.routing import get_osrm_distance_matrix, solve_tsp_nearest_neighbor
 from services.cache import (
@@ -29,10 +28,16 @@ from services.cache import (
 from services.tracer import trace_step
 from agents.intent_agent import extract_locations
 
-client = OpenAI()
 
 @observe(name="generate_shpresa_itinerary")
 def run_planner_pipeline(user_query: str) -> str:
+    # Initialize Groq client dynamically inside function execution
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        raise ValueError("GROQ_API_KEY is missing from environment variables.")
+    
+    client = Groq(api_key=groq_api_key)
+
     # Set trace metadata
     langfuse_context.update_current_trace(
         name="itinerary_generation",
@@ -69,14 +74,14 @@ def run_planner_pipeline(user_query: str) -> str:
         route_order = solve_tsp_nearest_neighbor(matrix)
         optimized_locations = [valid_locations[i] for i in route_order]
 
-    # 4. Final LLM Synthesis Span
+    # 4. Final Groq LLM Synthesis Span
     with langfuse_context.span("llm_narrative_synthesis"):
         prompt = (
             f"User request: {user_query}. "
             f"Build an itinerary strictly following this optimal path: {' -> '.join(optimized_locations)}"
         )
         res = client.chat.completions.create(
-            model="gpt-4o",
+            model="llama-3.3-70b-versatile",  # Fast & high quality Groq model
             messages=[{"role": "user", "content": prompt}]
         )
         response_text = res.choices[0].message.content
