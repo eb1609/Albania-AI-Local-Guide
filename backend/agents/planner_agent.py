@@ -1,15 +1,33 @@
-# backend/agents/planner_agent.py
+import os
+from contextlib import nullcontext
 from openai import OpenAI
-from langfuse.decorators import observe, langfuse_context
 
-from ..services.config import ALBANIA_COORDS
-from ..services.routing import get_osrm_distance_matrix, solve_tsp_nearest_neighbor
-from ..services.cache import (
+# Safe Langfuse fallback: prevents crashes if langfuse is missing or unconfigured
+try:
+    from langfuse.decorators import observe, langfuse_context  # type: ignore
+except (ImportError, ModuleNotFoundError):
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    class DummyLangfuseContext:
+        def update_current_trace(self, *args, **kwargs):
+            pass
+        def span(self, *args, **kwargs):
+            return nullcontext()
+
+    langfuse_context = DummyLangfuseContext()
+
+# Absolute imports matching sys.path search path in backend/main.py
+from services.config import ALBANIA_COORDS
+from services.routing import get_osrm_distance_matrix, solve_tsp_nearest_neighbor
+from services.cache import (
     get_exact_cache, set_exact_cache,
     get_semantic_cache, set_semantic_cache
 )
-from ..services.tracer import trace_step
-from .intent_agent import extract_locations
+from services.tracer import trace_step
+from agents.intent_agent import extract_locations
 
 client = OpenAI()
 
