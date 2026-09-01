@@ -20,8 +20,9 @@ def extract_locations_and_intent(user_query: str) -> dict:
     )
 
     try:
+        # Replace "llama-3.1-70b-versatile" with "gpt-oss-120b"
         res = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model="gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )

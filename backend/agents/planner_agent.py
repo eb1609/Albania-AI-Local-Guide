@@ -83,10 +83,14 @@ def run_planner_pipeline(user_query: str) -> str:
             f"User request: {user_query}. "
             f"Build a personalized Albanian itinerary strictly following this optimal route: {' -> '.join(optimized_locations)}"
         )
+        # Update both small-talk/greeting and final itinerary synthesis calls
         res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
+            model="gpt-oss-120b",
+            messages=[
+        {"role": "system", "content": "You are Shpresa, an AI travel assistant for Albania..."},
+        {"role": "user", "content": user_query}
+    ]
+)
         response_text = res.choices[0].message.content
 
     # 6. Populate Cache
