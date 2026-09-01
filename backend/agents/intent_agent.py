@@ -3,18 +3,20 @@ import os
 import json
 from groq import Groq
 
-def extract_locations(user_query: str) -> list[str]:
-    """Extracts Albanian location names from a user query using Groq."""
+def extract_locations_and_intent(user_query: str) -> dict:
+    """Extracts locations and identifies if the user is just saying hello."""
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
-        return []
+        return {"is_greeting": False, "locations": []}
 
     client = Groq(api_key=groq_api_key)
 
     prompt = (
-        f"Extract all mentioned Albanian cities, towns, or regions from this text: '{user_query}'. "
-        "Return JSON strictly with format: {\"locations\": [\"city1\", \"city2\"]}. "
-        "Use plain unaccented English names in lowercase, e.g. \"shkoder\", \"tirana\", \"saranda\", \"vlora\"."
+        f"Analyze this user query: '{user_query}'.\n"
+        "1. Is it a general greeting or small talk (e.g. 'hi', 'hello', 'hey', 'who are you') without specific travel planning intent?\n"
+        "2. Extract any mentioned Albanian cities, towns, or regions as lowercase unaccented strings (e.g. 'tirana', 'shkoder').\n\n"
+        "Return STRICTLY JSON format:\n"
+        "{\"is_greeting\": true/false, \"locations\": [\"city1\"]}"
     )
 
     try:
@@ -23,12 +25,11 @@ def extract_locations(user_query: str) -> list[str]:
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
-        content = res.choices[0].message.content
-        data = json.loads(content)
-        
-        raw_locations = data.get("locations", [])
-        # Normalize extracted strings to lower-case stripped values
-        return [str(loc).strip().lower() for loc in raw_locations]
+        data = json.loads(res.choices[0].message.content)
+        return {
+            "is_greeting": bool(data.get("is_greeting", False)),
+            "locations": [str(loc).strip().lower() for loc in data.get("locations", [])]
+        }
     except Exception as e:
         print(f"Intent extraction error: {e}")
-        return []
+        return {"is_greeting": False, "locations": []}
