@@ -32,6 +32,37 @@ app.add_middleware(
     expose_headers=["Content-Type", "Cache-Control"],
 )
 
+def normalize_places(places_data: list) -> list:
+    """Normalizes raw Google Places objects into a clean, predictable shape for MapView."""
+    normalized = []
+    if not isinstance(places_data, list):
+        return normalized
+
+    for p in places_data:
+        if not isinstance(p, dict):
+            continue
+            
+        # Support flat keys (lat/lng, latitude/longitude) or nested Google geometry
+        lat = p.get("lat") or p.get("latitude") or p.get("geometry", {}).get("location", {}).get("lat")
+        lng = p.get("lng") or p.get("longitude") or p.get("geometry", {}).get("location", {}).get("lng")
+        
+        if lat is None or lng is None:
+            continue
+
+        try:
+            normalized.append({
+                "place_id": p.get("place_id") or p.get("id") or f"place-{len(normalized)}",
+                "name": p.get("name") or p.get("title") or "Recommended Place",
+                "lat": float(lat),
+                "lng": float(lng),
+                "address": p.get("address") or p.get("formatted_address") or "",
+                "rating": p.get("rating", "N/A")
+            })
+        except (ValueError, TypeError):
+            continue
+
+    return normalized
+
 @app.get("/health")
 async def health_check():
     """System health check verifying service status."""
@@ -41,9 +72,14 @@ async def health_check():
         "pipeline": "OSRM + Redis Cache + Langfuse Active"
     }
 
-async def stream_text_as_sse(text: str, agent_label: str = "guide") -> AsyncGenerator[str, None]:
+async def stream_text_as_sse(text: str, places: list = None, agent_label: str = "guide") -> AsyncGenerator[str, None]:
     """Helper to stream pre-computed or cached text back via Server-Sent Events (SSE)."""
-    # Simulate chunked streaming for cached or deterministic pipeline outputs
+    # 1. Emit places event first if present in cached hit
+    if places:
+        places_json = json.dumps(places)
+        yield f"event: places\ndata: {places_json}\n\n"
+
+    # 2. Simulate chunked text streaming
     chunk_size = 20
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
@@ -63,8 +99,9 @@ async def stream(msg: str = Query(..., description="User query for itinerary/rec
     exact_hit = get_exact_cache(msg)
     if exact_hit:
         print("⚡ [Cache Hit - Exact]")
+        cached_data = json.loads(exact_hit) if isinstance(exact_hit, str) and exact_hit.startswith("{") else {"text": exact_hit}
         return StreamingResponse(
-            stream_text_as_sse(f"[Cache Hit - Exact]\n\n{exact_hit}"),
+            stream_text_as_sse(cached_data.get("text", exact_hit), places=cached_data.get("places")),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
@@ -73,21 +110,40 @@ async def stream(msg: str = Query(..., description="User query for itinerary/rec
     semantic_hit = get_semantic_cache(msg)
     if semantic_hit:
         print("⚡ [Cache Hit - Semantic]")
+        cached_data = json.loads(semantic_hit) if isinstance(semantic_hit, str) and semantic_hit.startswith("{") else {"text": semantic_hit}
         return StreamingResponse(
-            stream_text_as_sse(f"[Cache Hit - Semantic]\n\n{semantic_hit}"),
+            stream_text_as_sse(cached_data.get("text", semantic_hit), places=cached_data.get("places")),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
 
-    # 3. Cache Miss: Execute Agent Pipeline (Intent -> OSRM TSP Solver -> LLM Synthesis)
+    # 3. Cache Miss: Execute Agent Pipeline
     async def pipeline_generator():
         try:
-            # Runs the full agent workflow wrapped with Langfuse tracing
-            response_text = run_planner_pipeline(msg)
+            # Execute pipeline
+            result = run_planner_pipeline(msg)
 
-            # Write to Caches asynchronously after execution
-            set_exact_cache(msg, response_text)
-            set_semantic_cache(msg, response_text)
+            # Unpack response if dictionary (text + places), or string fallback
+            if isinstance(result, dict):
+                response_text = result.get("text", "")
+                raw_places = result.get("places", [])
+            else:
+                response_text = str(result)
+                raw_places = []
+
+            # Normalize place objects
+            normalized_places = normalize_places(raw_places)
+
+            # --- DEDICATED SSE EVENT FOR PLACES ---
+            if normalized_places:
+                print(f"📍 Emitting {len(normalized_places)} normalized places to map")
+                places_payload = json.dumps(normalized_places)
+                yield f"event: places\ndata: {places_payload}\n\n"
+
+            # Cache the structured execution output
+            cache_payload = json.dumps({"text": response_text, "places": normalized_places})
+            set_exact_cache(msg, cache_payload)
+            set_semantic_cache(msg, cache_payload)
 
             # Stream result tokens back to frontend
             chunk_size = 15

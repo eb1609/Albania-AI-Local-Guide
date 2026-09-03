@@ -66,7 +66,8 @@ def is_place_seeking_query(user_query: str) -> bool:
 
 
 @observe(name="generate_shpresa_itinerary")
-def run_planner_pipeline(user_query: str) -> str:
+def run_planner_pipeline(user_query: str) -> dict:
+    """Executes the planner pipeline and returns both synthesized text and structured place objects."""
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY is missing from environment variables.")
@@ -88,17 +89,20 @@ def run_planner_pipeline(user_query: str) -> str:
         with langfuse_context.span("google_places_grounding"):
             logger.info(f"[Shpresa Routing] Place-seeking query detected: '{user_query}'")
             
-            # Fetch real places from API
+            # Fetch real places from Google Places API
             real_places = fetch_google_places(query=user_query)
             
             # Prevent LLM hallucination on 0 results
             if not real_places:
                 logger.info(f"[Google Places] Zero results returned for query: '{user_query}'.")
-                return f"I couldn't find any verified places matching '{user_query}' in Albania. Try searching for a different city or category!"
+                return {
+                    "text": f"I couldn't find any verified places matching '{user_query}' in Albania. Try searching for a different city or category!",
+                    "places": []
+                }
 
             # Build grounded data string for LLM
             formatted_data = "\n".join([
-                f"- Name: {p['name']} | Address: {p['address']} | Rating: {p['rating']} ({p['user_ratings_total']} reviews)"
+                f"- Name: {p['name']} | Address: {p.get('address', '')} | Rating: {p.get('rating', 'N/A')} ({p.get('user_ratings_total', 0)} reviews)"
                 for p in real_places
             ])
 
@@ -112,7 +116,12 @@ def run_planner_pipeline(user_query: str) -> str:
                 ],
                 temperature=0.1
             )
-            return res.choices[0].message.content
+            
+            # Return both text and structured ground-truth places
+            return {
+                "text": res.choices[0].message.content,
+                "places": real_places
+            }
 
     # 3. Conversational / Generic Greeting Fallback Branch
     if not valid_locations:
@@ -127,13 +136,19 @@ def run_planner_pipeline(user_query: str) -> str:
                 temperature=0.7,
                 max_tokens=250
             )
-            return res.choices[0].message.content
+            return {
+                "text": res.choices[0].message.content,
+                "places": []
+            }
         except Exception as e:
             logger.error(f"[Fallback Error] Failed to execute conversational fallback call: {e}")
-            return (
-                "Përshëndetje! I am Shpresa, your Albania travel guide. "
-                "Which destinations in Albania would you like to explore? (e.g., Tirana, Saranda, Shkoder)"
-            )
+            return {
+                "text": (
+                    "Përshëndetje! I am Shpresa, your Albania travel guide. "
+                    "Which destinations in Albania would you like to explore? (e.g., Tirana, Saranda, Shkoder)"
+                ),
+                "places": []
+            }
 
     logger.info(f"[Shpresa Routing] Multi-destination route detected: {valid_locations}. Proceeding to pathfinding pipeline.")
 
@@ -141,7 +156,10 @@ def run_planner_pipeline(user_query: str) -> str:
     with langfuse_context.span("cache_check"):
         exact_hit = get_exact_cache(user_query)
         if exact_hit:
-            return f"[Cache Hit - Exact]\n{exact_hit}"
+            return {
+                "text": f"[Cache Hit - Exact]\n{exact_hit}",
+                "places": []
+            }
 
     # 5. OSRM Distance Matrix & Pathfinding Span
     with langfuse_context.span("pathfinding_osrm_tsp"):
@@ -169,4 +187,7 @@ def run_planner_pipeline(user_query: str) -> str:
     with langfuse_context.span("cache_write"):
         set_exact_cache(user_query, response_text)
 
-    return response_text
+    return {
+        "text": response_text,
+        "places": []
+    }
