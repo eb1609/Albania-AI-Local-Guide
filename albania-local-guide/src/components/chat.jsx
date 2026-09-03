@@ -27,26 +27,37 @@ export default function Chat({ onAgentsUpdate, onPlacesUpdate }) {
     activeCleanupRef.current = startSSE(
       trimmed,
       // 1. On Chunk
-      // Inside startSSE onChunk in Chat.jsx:
-(chunk) => {
-  const { token } = chunk;
+      (chunk) => {
+        // A. Handle text tokens streaming in
+        if (chunk.token) {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "assistant") {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, text: last.text + chunk.token }
+              ];
+            }
+            return [...prev, { id: `assistant-${turnId}`, role: "assistant", text: chunk.token }];
+          });
+        }
 
-  if (token) {
-    setMessages((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.role === "assistant") {
-        return [
-          ...prev.slice(0, -1),
-          { ...last, text: last.text + token }
-        ];
-      }
-      return [...prev, { role: "assistant", text: token }];
-    });
-  }
-},
+        // B. Handle structured places payload sent over SSE
+        if (chunk.places && Array.isArray(chunk.places) && chunk.places.length > 0) {
+          if (typeof onPlacesUpdate === "function") {
+            onPlacesUpdate(chunk.places);
+          }
+        }
+
+        // C. Handle active agents update (if sent over SSE)
+        if (chunk.agents && typeof onAgentsUpdate === "function") {
+          onAgentsUpdate(chunk.agents);
+        }
+      },
       // 2. On Error
       (err) => {
         console.error("Stream failed", err);
+        setIsStreaming(false);
       },
       // 3. On Complete
       () => {
@@ -87,6 +98,7 @@ export default function Chat({ onAgentsUpdate, onPlacesUpdate }) {
             background: isStreaming ? "#ccc" : "var(--albanian-red, #e41e20)",
             color: "white",
             padding: "10px 20px",
+            border: "none",
             cursor: isStreaming ? "not-allowed" : "pointer"
           }}
         >
