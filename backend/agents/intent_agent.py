@@ -1,4 +1,3 @@
-# backend/agents/intent_agent.py
 import os
 import json
 from groq import Groq
@@ -20,9 +19,9 @@ def extract_locations_and_intent(user_query: str) -> dict:
     )
 
     try:
-        # Replace "llama-3.1-70b-versatile" with "gpt-oss-120b"
+        # Using full model identifier openai/gpt-oss-120b
         res = client.chat.completions.create(
-            model="gpt-oss-120b",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )

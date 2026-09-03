@@ -1,7 +1,10 @@
-# backend/agents/planner_agent.py
+import logging
 import os
 from contextlib import nullcontext
 from groq import Groq
+
+# Configure logger for intent and fallback tracing
+logger = logging.getLogger(__name__)
 
 # Safe Langfuse fallback
 try:
@@ -28,6 +31,14 @@ from services.cache import (
 )
 from agents.intent_agent import extract_locations_and_intent
 
+# System prompt for conversational fallback & greetings
+GENERAL_GUIDE_SYSTEM_PROMPT = (
+    "You are Shpresa, a warm and friendly AI travel assistant for Albania. "
+    "If the user greets you or makes general conversation, respond naturally and warmly, "
+    "then invite them to share which Albanian destinations, regions, or experiences "
+    "they are interested in (e.g., Tirana, Shkoder, Saranda, Vlora, or Theth). "
+    "If no specific destination is mentioned, offer helpful travel inspiration about Albania."
+)
 
 @observe(name="generate_shpresa_itinerary")
 def run_planner_pipeline(user_query: str) -> str:
@@ -47,22 +58,29 @@ def run_planner_pipeline(user_query: str) -> str:
         coords_normalized = {k.lower(): v for k, v in ALBANIA_COORDS.items()}
         valid_locations = [loc for loc in locations if loc in coords_normalized]
 
-    # 2. Greeting / Fallback Direct Response
-    if is_greeting and not valid_locations:
-        res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are Shpresa, an AI travel assistant for Albania. Greet the user warmly and invite them to ask about destinations in Albania (like Tirana, Shkoder, Saranda, or Theth)."},
-                {"role": "user", "content": user_query}
-            ]
-        )
-        return res.choices[0].message.content
-
+    # 2. Greeting / Ambiguous Input Fallback (Dynamic LLM Response)
     if not valid_locations:
-        return (
-            "Përshëndetje! I couldn't spot any specific Albanian destinations in your message. "
-            "Where would you like to go? (e.g., Tirana, Shkoder, Saranda, Vlora)"
-        )
+        logger.info("[Shpresa Routing] No valid destinations detected. Triggering conversational LLM fallback.")
+        try:
+            res = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {"role": "system", "content": GENERAL_GUIDE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_query}
+                ],
+                temperature=0.7,
+                max_tokens=250
+            )
+            return res.choices[0].message.content
+        except Exception as e:
+            logger.error(f"[Fallback Error] Failed to complete fallback LLM call: {e}")
+            # Resilient API failure fallback
+            return (
+                "Përshëndetje! I am Shpresa, your Albania travel guide. "
+                "Which destinations in Albania would you like to explore? (e.g., Tirana, Saranda, Shkoder)"
+            )
+
+    logger.info(f"[Shpresa Routing] Valid destinations detected: {valid_locations}. Proceeding to pathfinding pipeline.")
 
     # 3. Cache Check Span for Full Itineraries
     with langfuse_context.span("cache_check"):
@@ -83,14 +101,13 @@ def run_planner_pipeline(user_query: str) -> str:
             f"User request: {user_query}. "
             f"Build a personalized Albanian itinerary strictly following this optimal route: {' -> '.join(optimized_locations)}"
         )
-        # Update both small-talk/greeting and final itinerary synthesis calls
         res = client.chat.completions.create(
-            model="gpt-oss-120b",
+            model="openai/gpt-oss-120b",
             messages=[
-        {"role": "system", "content": "You are Shpresa, an AI travel assistant for Albania..."},
-        {"role": "user", "content": user_query}
-    ]
-)
+                {"role": "system", "content": "You are Shpresa, an expert AI travel assistant for Albania. Synthesize engaging, well-structured travel itineraries."},
+                {"role": "user", "content": prompt}
+            ]
+        )
         response_text = res.choices[0].message.content
 
     # 6. Populate Cache
