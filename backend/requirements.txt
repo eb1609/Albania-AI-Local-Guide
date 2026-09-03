@@ -6,4 +6,4 @@ openai
 python-dotenv
 redis
 numpy
-langfuse
+langfuse>=2.0.0

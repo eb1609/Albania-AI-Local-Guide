@@ -3,7 +3,7 @@ import os
 from contextlib import nullcontext
 from groq import Groq
 
-# Configure logger for intent and fallback tracing
+# Configure logger for intent, routing, and fallback tracing
 logger = logging.getLogger(__name__)
 
 # Safe Langfuse fallback
@@ -29,9 +29,10 @@ from services.cache import (
     get_exact_cache, set_exact_cache,
     get_semantic_cache, set_semantic_cache
 )
+from services.places_service import fetch_google_places
 from agents.intent_agent import extract_locations_and_intent
 
-# System prompt for conversational fallback & greetings
+# System prompt for conversational fallback & general greetings
 GENERAL_GUIDE_SYSTEM_PROMPT = (
     "You are Shpresa, a warm and friendly AI travel assistant for Albania. "
     "If the user greets you or makes general conversation, respond naturally and warmly, "
@@ -39,6 +40,30 @@ GENERAL_GUIDE_SYSTEM_PROMPT = (
     "they are interested in (e.g., Tirana, Shkoder, Saranda, Vlora, or Theth). "
     "If no specific destination is mentioned, offer helpful travel inspiration about Albania."
 )
+
+# Strict system prompt for place, restaurant, and hotel recommendations
+PLACES_STRICT_FORMATTER_PROMPT = (
+    "You are Shpresa, an expert AI travel guide for Albania.\n"
+    "CRITICAL CONSTRAINTS FOR PLACES/RESTAURANTS/HOTELS:\n"
+    "1. ONLY present the exact places provided in the 'VERIFIED_PLACES_DATA' block.\n"
+    "2. Do NOT invent, supplement, add, or suggest any other restaurants, hotels, or attractions under any circumstances.\n"
+    "3. Display each place's name, formatted address, and rating exactly as provided in the data.\n"
+    "4. If 'VERIFIED_PLACES_DATA' is empty or contains no records, inform the user clearly that no verified places were found."
+)
+
+MODEL_NAME = "openai/gpt-oss-120b"
+
+
+def is_place_seeking_query(user_query: str) -> bool:
+    """Helper to detect whether the query is asking for restaurants, hotels, or local spots."""
+    query_lower = user_query.lower()
+    place_keywords = [
+        "restaurant", "restaurants", "food", "eat", "cafe", "cafes",
+        "hotel", "hotels", "stay", "accommodation", "bar", "bars",
+        "place to eat", "where to eat", "attractions", "things to do"
+    ]
+    return any(keyword in query_lower for keyword in place_keywords)
+
 
 @observe(name="generate_shpresa_itinerary")
 def run_planner_pipeline(user_query: str) -> str:
@@ -58,12 +83,43 @@ def run_planner_pipeline(user_query: str) -> str:
         coords_normalized = {k.lower(): v for k, v in ALBANIA_COORDS.items()}
         valid_locations = [loc for loc in locations if loc in coords_normalized]
 
-    # 2. Greeting / Ambiguous Input Fallback (Dynamic LLM Response)
+    # 2. Places API Grounding Branch (Restaurants, Hotels, Points of Interest)
+    if is_place_seeking_query(user_query):
+        with langfuse_context.span("google_places_grounding"):
+            logger.info(f"[Shpresa Routing] Place-seeking query detected: '{user_query}'")
+            
+            # Fetch real places from API
+            real_places = fetch_google_places(query=user_query)
+            
+            # Prevent LLM hallucination on 0 results
+            if not real_places:
+                logger.info(f"[Google Places] Zero results returned for query: '{user_query}'.")
+                return f"I couldn't find any verified places matching '{user_query}' in Albania. Try searching for a different city or category!"
+
+            # Build grounded data string for LLM
+            formatted_data = "\n".join([
+                f"- Name: {p['name']} | Address: {p['address']} | Rating: {p['rating']} ({p['user_ratings_total']} reviews)"
+                for p in real_places
+            ])
+
+            logger.info(f"[Google Places] Grounding LLM response with {len(real_places)} real places.")
+
+            res = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": PLACES_STRICT_FORMATTER_PROMPT},
+                    {"role": "user", "content": f"User Query: {user_query}\n\nVERIFIED_PLACES_DATA:\n{formatted_data}"}
+                ],
+                temperature=0.1
+            )
+            return res.choices[0].message.content
+
+    # 3. Conversational / Generic Greeting Fallback Branch
     if not valid_locations:
-        logger.info("[Shpresa Routing] No valid destinations detected. Triggering conversational LLM fallback.")
+        logger.info("[Shpresa Routing] No valid destinations or place intents detected. Triggering conversational fallback.")
         try:
             res = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": GENERAL_GUIDE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_query}
@@ -73,36 +129,35 @@ def run_planner_pipeline(user_query: str) -> str:
             )
             return res.choices[0].message.content
         except Exception as e:
-            logger.error(f"[Fallback Error] Failed to complete fallback LLM call: {e}")
-            # Resilient API failure fallback
+            logger.error(f"[Fallback Error] Failed to execute conversational fallback call: {e}")
             return (
                 "Përshëndetje! I am Shpresa, your Albania travel guide. "
                 "Which destinations in Albania would you like to explore? (e.g., Tirana, Saranda, Shkoder)"
             )
 
-    logger.info(f"[Shpresa Routing] Valid destinations detected: {valid_locations}. Proceeding to pathfinding pipeline.")
+    logger.info(f"[Shpresa Routing] Multi-destination route detected: {valid_locations}. Proceeding to pathfinding pipeline.")
 
-    # 3. Cache Check Span for Full Itineraries
+    # 4. Cache Check Span for Full Itineraries
     with langfuse_context.span("cache_check"):
         exact_hit = get_exact_cache(user_query)
         if exact_hit:
             return f"[Cache Hit - Exact]\n{exact_hit}"
 
-    # 4. OSRM Distance Matrix & Pathfinding Span
+    # 5. OSRM Distance Matrix & Pathfinding Span
     with langfuse_context.span("pathfinding_osrm_tsp"):
         coords = [coords_normalized[loc] for loc in valid_locations]
         matrix = get_osrm_distance_matrix(coords)
         route_order = solve_tsp_nearest_neighbor(matrix)
         optimized_locations = [valid_locations[i].capitalize() for i in route_order]
 
-    # 5. Final LLM Itinerary Synthesis Span
+    # 6. Final LLM Itinerary Synthesis Span
     with langfuse_context.span("llm_narrative_synthesis"):
         prompt = (
             f"User request: {user_query}. "
             f"Build a personalized Albanian itinerary strictly following this optimal route: {' -> '.join(optimized_locations)}"
         )
         res = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": "You are Shpresa, an expert AI travel assistant for Albania. Synthesize engaging, well-structured travel itineraries."},
                 {"role": "user", "content": prompt}
@@ -110,7 +165,7 @@ def run_planner_pipeline(user_query: str) -> str:
         )
         response_text = res.choices[0].message.content
 
-    # 6. Populate Cache
+    # 7. Populate Cache
     with langfuse_context.span("cache_write"):
         set_exact_cache(user_query, response_text)
 
