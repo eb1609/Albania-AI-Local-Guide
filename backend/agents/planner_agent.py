@@ -48,19 +48,24 @@ PLACES_STRICT_FORMATTER_PROMPT = (
     "1. ONLY present the exact places provided in the 'VERIFIED_PLACES_DATA' block.\n"
     "2. Do NOT invent, supplement, add, or suggest any other restaurants, hotels, or attractions under any circumstances.\n"
     "3. Display each place's name, formatted address, and rating exactly as provided in the data.\n"
-    "4. If 'VERIFIED_PLACES_DATA' is empty or contains no records, inform the user clearly that no verified places were found."
+    "4. If 'VERIFIED_PLACES_DATA' is empty or contains no records, inform the user clearly that no verified places were found.\n"
+    "5. Name & Vibe: Describe what kind of spot it is (e.g., traditional wooden tavern, scenic riverfront terrace, modern eatery).\n"
+    "6. Food & Specialties: Focus on specific local dishes, cuisine types, fresh ingredients, or recommended items mentioned in reviews (e.g., traditional tava kosi, fresh Shkodër carp, grilled meats, homemade raki).\n"
+    "7. What Reviewers Say: Summarize customer sentiment—mentioning service quality, view/ambiance, portions, value for money, or popular seating areas.\n"
 )
 
 MODEL_NAME = "openai/gpt-oss-120b"
 
 
 def is_place_seeking_query(user_query: str) -> bool:
-    """Helper to detect whether the query is asking for restaurants, hotels, or local spots."""
+    """Helper to detect whether the query is asking for restaurants, hotels, local spots, or place details."""
     query_lower = user_query.lower()
     place_keywords = [
         "restaurant", "restaurants", "food", "eat", "cafe", "cafes",
         "hotel", "hotels", "stay", "accommodation", "bar", "bars",
-        "place to eat", "where to eat", "attractions", "things to do"
+        "place to eat", "where to eat", "attractions", "things to do",
+        "tell me about", "tell me abt", "review", "reviews", "what do people say",
+        "menu", "specialties", "dishes", "vibe"
     ]
     return any(keyword in query_lower for keyword in place_keywords)
 
@@ -89,7 +94,7 @@ def run_planner_pipeline(user_query: str) -> dict:
         with langfuse_context.span("google_places_grounding"):
             logger.info(f"[Shpresa Routing] Place-seeking query detected: '{user_query}'")
             
-            # Fetch real places from Google Places API
+            # Fetch real places from Google Places API (includes detailed reviews & summaries)
             real_places = fetch_google_places(query=user_query)
             
             # Prevent LLM hallucination on 0 results
@@ -100,11 +105,24 @@ def run_planner_pipeline(user_query: str) -> dict:
                     "places": []
                 }
 
-            # Build grounded data string for LLM
-            formatted_data = "\n".join([
-                f"- Name: {p['name']} | Address: {p.get('address', '')} | Rating: {p.get('rating', 'N/A')} ({p.get('user_ratings_total', 0)} reviews)"
-                for p in real_places
-            ])
+            # Build grounded data string incorporating review snippets & editorial summary
+            formatted_blocks = []
+            for p in real_places:
+                reviews_list = p.get("reviews_snippets", [])
+                reviews_str = " | ".join(reviews_list) if reviews_list else "No text review snippets available."
+                summary_str = p.get("editorial_summary") or "Popular local destination."
+                price_str = f"Price Level: {p.get('price_level')}" if p.get('price_level') is not None else ""
+
+                block = (
+                    f"- Name: {p['name']}\n"
+                    f"  Address: {p.get('address', '')}\n"
+                    f"  Rating: {p.get('rating', 'N/A')}⭐ ({p.get('user_ratings_total', 0)} reviews) {price_str}\n"
+                    f"  Overview: {summary_str}\n"
+                    f"  Customer Reviews Snippets: {reviews_str}"
+                )
+                formatted_blocks.append(block)
+
+            formatted_data = "\n\n".join(formatted_blocks)
 
             logger.info(f"[Google Places] Grounding LLM response with {len(real_places)} real places.")
 
